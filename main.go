@@ -58,6 +58,9 @@ var expireClaimedLRPStartAuctionDuration = flag.Duration(
 	"unclaimed start auctions for long-running processes are deleted, after this time (in seconds)",
 )
 
+var stopSignal chan bool = make(chan bool, 1)
+var drainSignal chan bool = make(chan bool, 1)
+
 func main() {
 	flag.Parse()
 
@@ -91,10 +94,22 @@ func main() {
 
 	logger.Info("started")
 
-	err := <-monitor.Wait()
-	if err != nil {
-		logger.Error("exited-with-failure", err)
-		os.Exit(1)
+mainLoop:
+	for {
+		select {
+		case err := <-monitor.Wait():
+			if err != nil {
+				logger.Error("exited-with-failure", err)
+				os.Exit(1)
+			}
+		case <-stopSignal:
+			monitor.Signal(os.Interrupt)
+			break mainLoop
+		case <-drainSignal:
+			logger.Info("drain-initiated")
+			// implement drain logic here
+		}
+
 	}
 
 	logger.Info("exited")
