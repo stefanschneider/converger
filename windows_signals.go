@@ -6,6 +6,7 @@ import (
 	"code.google.com/p/winsvc/svc"
 	"code.google.com/p/winsvc/winapi"
 	"errors"
+	"flag"
 	"log"
 	"os"
 	"os/signal"
@@ -16,12 +17,13 @@ type WindowsService struct {
 	started chan bool
 }
 
-var logFile *os.File
+var stdoutFile *os.File
+var stderrFile *os.File
 
 func (ws *WindowsService) Execute(args []string, r <-chan svc.ChangeRequest, s chan<- svc.Status) (svcSpecificEC bool, exitCode uint32) {
 	ws.started <- true
 
-	s <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown | svc.AcceptPauseAndContinue}
+	s <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
 
 loop:
 	for {
@@ -32,18 +34,10 @@ loop:
 				s <- change.CurrentStatus
 			case svc.Stop, svc.Shutdown:
 				{
-					s <- svc.Status{State: svc.StopPending}
 					stopSignal <- true
-
-					//curProc, _ := os.FindProcess(os.Getpid())
-					//curProc.Signal(os.Interrupt) // or os.Kill ? // not working for services :/
 
 					break loop
 				}
-			case svc.Pause:
-				s <- svc.Status{State: svc.Paused, Accepts: svc.AcceptStop | svc.AcceptShutdown | svc.AcceptPauseAndContinue}
-			case svc.Continue:
-				s <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown | svc.AcceptPauseAndContinue}
 			default:
 				{
 					break loop
@@ -51,6 +45,7 @@ loop:
 			}
 		}
 	}
+
 	s <- svc.Status{State: svc.StopPending}
 
 	return
@@ -58,6 +53,8 @@ loop:
 
 func init() {
 	drainEventName := "cf-converger-drain"
+
+	redirectStdStreams()
 
 	if interactive, _ := svc.IsAnInteractiveSession(); interactive {
 		log.Print("Interactive mode")
@@ -74,11 +71,6 @@ func init() {
 		}()
 
 	} else {
-		// TODO: Retrive the ouput log from a config file
-		logFile, _ = os.OpenFile("C:\\cf-converver.log", os.O_WRONLY|os.O_CREATE|os.O_APPEND|os.O_SYNC, 0666)
-		os.Stdout = logFile
-		os.Stderr = logFile
-
 		log.Print("Service mode")
 
 		// Use global named object so that the Event could be signaled from an interactive seession
@@ -116,6 +108,50 @@ func init() {
 		}
 
 	}()
+}
+
+func redirectStdStreams() {
+	stdoutFilePath := ""
+	stderrFilePath := ""
+
+	flag.StringVar(
+		&stdoutFilePath,
+		"stdoutFile",
+		"",
+		"Path of file where to redirect stdout stream",
+	)
+
+	flag.StringVar(
+		&stderrFilePath,
+		"stderrFile",
+		"",
+		"Path of file where to redirect stderr stream",
+	)
+
+	if !flag.Parsed() {
+		flag.Parse()
+	}
+
+	var err error = nil
+
+	if stdoutFilePath != "" {
+		stdoutFile, err = os.OpenFile(stdoutFilePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND|os.O_SYNC, 0660)
+		if err != nil {
+			log.Fatal("Error opening stdoutFile", err)
+		}
+		os.Stdout = stdoutFile
+	}
+	if stderrFilePath != "" {
+		if stderrFilePath != stdoutFilePath {
+			stderrFile, err = os.OpenFile(stderrFilePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND|os.O_SYNC, 0660)
+			if err != nil {
+				log.Fatal("Error opening stderrFile", err)
+			}
+		} else {
+			stderrFile = stdoutFile
+		}
+		os.Stderr = stderrFile
+	}
 }
 
 // Code adapted from here: https://code.google.com/p/winsvc/source/browse/svc/event.go
